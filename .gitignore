@@ -1,0 +1,4 @@
+/target
+# Wi-Fi credentials and BTC address end up in here, and in the firmware image.
+.env
+*.uf2

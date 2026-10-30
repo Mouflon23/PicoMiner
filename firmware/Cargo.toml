@@ -1,0 +1,31 @@
+[package]
+name = "picominer-firmware"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "picominer"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+picominer-core = { path = "../core", features = ["ram-code"] }
+embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "boot2-w25q080", "executor-interrupt", "unstable-pac", "rom-func-cache", "intrinsics"] }
+embassy-executor = "0.10"
+embassy-net = { version = "0.9", features = ["tcp", "dns", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
+embassy-time = "0.5"
+embassy-sync = "0.8"
+embassy-futures = "0.1"
+embassy-usb-logger = "0.6"
+cyw43 = "0.7"
+cyw43-pio = "0.10"
+cyw43-firmware = { version = "0.1", features = ["wifi"] }
+embedded-graphics = "0.8"
+static_cell = "2"
+portable-atomic = { version = "1", features = ["critical-section"] }
+heapless = "0.9"
+log = "0.4"
+cortex-m = { version = "0.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7"
