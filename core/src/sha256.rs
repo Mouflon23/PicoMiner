@@ -238,8 +238,6 @@ impl Work {
     /// Tries `count` nonces from `start` and returns the first whose hash has a
     /// top little-endian word at most `limit`. The hit still has to be confirmed
     /// against the exact target with [`Work::hash`]: only the top word is computed.
-    #[cfg_attr(feature = "ram-code", unsafe(link_section = ".data.ram_func"))]
-    #[inline(never)]
     pub fn scan(&self, start: u32, count: u32, limit: u32) -> Option<u32> {
         let mut w = [0u32; 64];
         w[0] = self.tail[0];
@@ -303,6 +301,8 @@ impl Work {
         None
     }
 }
+
+include!("scan_context.rs");
 
 #[cfg(test)]
 mod tests {

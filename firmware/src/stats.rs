@@ -42,6 +42,9 @@ pub struct Stats {
     pub height: u32,
     pub rssi: i32,
     pub ip: [u8; 4],
+    pub temperature: f32,
+    /// Times the assembly and the Rust SHA-256 disagreed.
+    pub bad_hits: u32,
 }
 
 static STATS: Mutex<CriticalSectionRawMutex, RefCell<Stats>> = Mutex::new(RefCell::new(Stats {
@@ -54,6 +57,8 @@ static STATS: Mutex<CriticalSectionRawMutex, RefCell<Stats>> = Mutex::new(RefCel
     height: 0,
     rssi: 0,
     ip: [0; 4],
+    temperature: 0.0,
+    bad_hits: 0,
 }));
 
 pub fn get() -> Stats {

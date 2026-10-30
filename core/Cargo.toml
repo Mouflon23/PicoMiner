@@ -3,7 +3,3 @@ name = "picominer-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-
-[features]
-# Runs the nonce loop from SRAM instead of XIP flash (thumbv6m firmware only).
-ram-code = []

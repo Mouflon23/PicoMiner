@@ -3,6 +3,7 @@
 
 use core::fmt::Write;
 
+use embassy_rp::adc::{Adc, Blocking, Channel};
 use embassy_rp::gpio::Input;
 use embassy_time::{Duration, Instant, Ticker};
 use embedded_graphics::mono_font::MonoFont;
@@ -89,15 +90,27 @@ fn network_page(display: &mut Display, stats: &Stats, total: u64) {
     let _ = write!(text, "{a}.{b}.{c}.{d}");
     left(display, 0, 26, &text);
     text.clear();
-    let _ = write!(text, "Signal {} dBm", stats.rssi);
+    let _ = write!(text, "{} dBm  {:.0} C", stats.rssi, stats.temperature);
     left(display, 0, 38, &text);
     text.clear();
     let _ = write!(text, "Hashes {}", Si(total as f64));
     left(display, 0, 50, &text);
 }
 
+/// Die temperature, using the conversion from the RP2040 datasheet.
+fn read_temperature(adc: &mut Adc<'static, Blocking>, sensor: &mut Channel<'static>) -> f32 {
+    let volts = adc.blocking_read(sensor).unwrap_or(0) as f32 * 3.3 / 4096.0;
+    27.0 - (volts - 0.706) / 0.001721
+}
+
 #[embassy_executor::task]
-pub async fn run(mut display: Display, key0: Input<'static>, key1: Input<'static>) -> ! {
+pub async fn run(
+    mut display: Display,
+    key0: Input<'static>,
+    key1: Input<'static>,
+    mut adc: Adc<'static, Blocking>,
+    mut sensor: Channel<'static>,
+) -> ! {
     let mut page = 0;
     let mut powered = true;
     let mut held = (false, false);
@@ -143,15 +156,19 @@ pub async fn run(mut display: Display, key0: Input<'static>, key1: Input<'static
             last_hashes = hashes;
             redraw = true;
             if ticks.is_multiple_of(200) {
+                let temperature = read_temperature(&mut adc, &mut sensor);
+                stats::update(|stats| stats.temperature = temperature);
                 let stats = stats::get();
                 info!(
-                    "{:.0} H/s, core0 {} core1 {}, best {:.6}, accepted {}, rejected {}, {}",
+                    "{:.0} H/s, core0 {} core1 {}, {:.0} C, best {:.6}, accepted {}, rejected {}, bad {}, {}",
                     hashrate,
                     hashes[0],
                     hashes[1],
+                    temperature,
                     stats.best,
                     stats.accepted,
                     stats.rejected,
+                    stats.bad_hits,
                     stats.status.label(),
                 );
             }

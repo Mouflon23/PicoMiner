@@ -10,9 +10,14 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[features]
+# Replaces mining by a check of the assembly against the Rust SHA-256 on every
+# nonce, to find the clock a given chip really sustains.
+stress = []
+
 [dependencies]
-picominer-core = { path = "../core", features = ["ram-code"] }
-embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "boot2-w25q080", "executor-interrupt", "unstable-pac", "rom-func-cache", "intrinsics"] }
+picominer-core = { path = "../core" }
+embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "boot2-w25q080", "executor-interrupt", "unstable-pac"] }
 embassy-executor = "0.10"
 embassy-net = { version = "0.9", features = ["tcp", "dns", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
 embassy-time = "0.5"
@@ -22,6 +27,7 @@ embassy-usb-logger = "0.6"
 cyw43 = "0.7"
 cyw43-pio = "0.10"
 cyw43-firmware = { version = "0.1", features = ["wifi"] }
+fixed = "1"
 embedded-graphics = "0.8"
 static_cell = "2"
 portable-atomic = { version = "1", features = ["critical-section"] }

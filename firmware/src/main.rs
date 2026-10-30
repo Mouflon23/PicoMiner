@@ -4,22 +4,26 @@
 #![no_std]
 #![no_main]
 
+mod boot;
 mod config;
 mod display;
 mod miner;
 mod panic;
 mod pool;
+mod scan;
 mod stats;
 mod ui;
 
 use core::future::Future;
+use core::ptr::addr_of_mut;
 
 use cortex_m_rt::entry;
-use cyw43_pio::{PioSpi, RM2_CLOCK_DIVIDER};
+use cyw43_pio::PioSpi;
 use embassy_executor::Spawner;
 use embassy_net::{DhcpConfig, StackResources};
 use embassy_rp::Peri;
-use embassy_rp::clocks::{ClockConfig, RoscRng};
+use embassy_rp::adc::{self, Adc};
+use embassy_rp::clocks::{ClockConfig, PeriClkSrc, RoscRng};
 use embassy_rp::config::Config;
 use embassy_rp::executor::InterruptExecutor;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
@@ -27,17 +31,18 @@ use embassy_rp::interrupt;
 use embassy_rp::interrupt::{InterruptExt, Priority};
 use embassy_rp::multicore::{Stack, spawn_core1};
 use embassy_rp::peripherals::{
-    DMA_CH0, PIN_8, PIN_9, PIN_10, PIN_11, PIN_12, PIN_15, PIN_17, PIN_23, PIN_24, PIN_25, PIN_29, PIO0,
+    ADC, ADC_TEMP_SENSOR, DMA_CH0, PIN_8, PIN_9, PIN_10, PIN_11, PIN_12, PIN_15, PIN_17, PIN_23, PIN_24, PIN_25, PIN_29, PIO0,
     SPI1, USB,
 };
 use embassy_rp::pio::Pio;
 use embassy_rp::spi::{self, Spi};
-use embassy_rp::{bind_interrupts, dma, pio, rom_data, usb};
+use embassy_rp::{bind_interrupts, dma, pio, usb};
 use embassy_time::Timer;
 use embassy_usb_logger::ReceiverHandler;
-use log::{LevelFilter, info, warn};
+use fixed::FixedU32;
+use log::{LevelFilter, error, info, warn};
 use picominer_core::sha256::Work;
-use static_cell::{ConstStaticCell, StaticCell};
+use static_cell::StaticCell;
 
 use crate::display::Display;
 use crate::stats::Status;
@@ -49,7 +54,9 @@ bind_interrupts!(struct Irqs {
 });
 
 static EXECUTOR: InterruptExecutor = InterruptExecutor::new();
-static CORE1_STACK: ConstStaticCell<Stack<4096>> = ConstStaticCell::new(Stack::new());
+
+#[unsafe(link_section = ".miner1.stack")]
+static mut CORE1_STACK: Stack<4096> = Stack::new();
 
 #[interrupt]
 unsafe fn SWI_IRQ_1() {
@@ -63,7 +70,7 @@ struct Commands;
 impl ReceiverHandler for Commands {
     fn handle_data(&self, data: &[u8]) -> impl Future<Output = ()> + Send {
         if data.starts_with(b"bootsel") {
-            rom_data::reset_to_usb_boot(0, 0);
+            boot::enter_bootloader();
         }
         async {}
     }
@@ -116,6 +123,8 @@ struct Board {
     wifi_clk: Peri<'static, PIN_29>,
     pio0: Peri<'static, PIO0>,
     dma: Peri<'static, DMA_CH0>,
+    adc: Peri<'static, ADC>,
+    temperature: Peri<'static, ADC_TEMP_SENSOR>,
 }
 
 async fn start_network(spawner: Spawner, board: Wifi) {
@@ -129,11 +138,10 @@ async fn start_network(spawner: Spawner, board: Wifi) {
     let cs = Output::new(board.cs, Level::High);
     let mut pio = Pio::new(board.pio0, Irqs);
     let dma = dma::Channel::new(board.dma, Irqs);
-    // The default divider would clock the chip at its 50 MHz limit from 200 MHz.
     let spi = PioSpi::new(
         &mut pio.common,
         pio.sm0,
-        RM2_CLOCK_DIVIDER,
+        FixedU32::from_bits(config::WIFI_DIVIDER << 8),
         pio.irq0,
         cs,
         board.dio,
@@ -156,6 +164,9 @@ async fn start_network(spawner: Spawner, board: Wifi) {
 
     let mut dhcp = DhcpConfig::default();
     dhcp.hostname = "picominer".try_into().ok();
+    // A second DHCP server on the network refuses the leases of the first, and
+    // honouring that drops the address, and the pool, right after connecting.
+    dhcp.ignore_naks = true;
     let seed = RoscRng.next_u64();
     let resources = NET_RESOURCES.init(StackResources::new());
     let (stack, runner) = embassy_net::new(device, embassy_net::Config::dhcpv4(dhcp), resources, seed);
@@ -172,10 +183,43 @@ struct Wifi {
     dma: Peri<'static, DMA_CH0>,
 }
 
+/// Feeds the watchdog, and calls the boot good once it has survived for a while.
+#[embassy_executor::task]
+async fn watchdog_feeder() -> ! {
+    for _ in 0..15 {
+        boot::feed();
+        Timer::after_secs(1).await;
+    }
+    boot::confirm();
+    loop {
+        boot::feed();
+        Timer::after_secs(1).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn safe_mode() -> ! {
+    let mut seconds = 0u32;
+    loop {
+        boot::feed();
+        if seconds % 3 == 2 {
+            warn!("safe mode: the last boot failed, power cycle or send bootsel");
+            panic::log_previous();
+        }
+        seconds += 1;
+        if seconds == 600 {
+            // Left alone, a miner should get back to work rather than wait here.
+            boot::retry();
+        }
+        Timer::after_secs(1).await;
+    }
+}
+
 #[embassy_executor::task]
 async fn startup(board: Board) {
     // SAFETY: called from a task of this same executor.
     let spawner = unsafe { Spawner::for_current_executor() }.await;
+    spawner.spawn(watchdog_feeder().unwrap());
     spawner.spawn(usb_logger(usb::Driver::new(board.usb, Irqs)).unwrap());
 
     let mut config = spi::Config::default();
@@ -190,9 +234,11 @@ async fn startup(board: Board) {
     .await;
     let key0 = Input::new(board.key0, Pull::Up);
     let key1 = Input::new(board.key1, Pull::Up);
-    spawner.spawn(ui::run(display, key0, key1).unwrap());
+    let adc = Adc::new_blocking(board.adc, adc::Config::default());
+    let sensor = adc::Channel::new_temp_sensor(board.temperature);
+    spawner.spawn(ui::run(display, key0, key1, adc, sensor).unwrap());
 
-    if !config::network_configured() {
+    if !config::network_configured() || cfg!(feature = "stress") {
         publish_benchmark();
     }
 
@@ -200,6 +246,9 @@ async fn startup(board: Board) {
     Timer::after_secs(2).await;
     info!("{} on {} kHz", config::AGENT, embassy_rp::clocks::clk_sys_freq() / 1000);
     panic::log_previous();
+    if !scan::self_test() {
+        error!("assembly self-test failed");
+    }
 
     let wifi = Wifi {
         pwr: board.wifi_pwr,
@@ -212,12 +261,49 @@ async fn startup(board: Board) {
     start_network(spawner, wifi).await;
 }
 
+/// Sets the flash clock divider. Runs from RAM because XIP is off while it does.
+#[unsafe(link_section = ".data.ram_func")]
+#[inline(never)]
+fn set_flash_divider(divider: u32) {
+    const SSI: *mut u32 = 0x1800_0000 as *mut u32;
+    const SSIENR: usize = 0x08 / 4;
+    const BAUDR: usize = 0x14 / 4;
+    const SR: usize = 0x28 / 4;
+    // SAFETY: these are the XIP SSI registers, and nothing else is running yet.
+    unsafe {
+        while SSI.add(SR).read_volatile() & 1 != 0 {}
+        SSI.add(SSIENR).write_volatile(0);
+        SSI.add(BAUDR).write_volatile(divider);
+        SSI.add(SSIENR).write_volatile(1);
+    }
+}
+
 #[entry]
 fn main() -> ! {
-    let clocks = ClockConfig::system_freq(config::SYS_HZ).unwrap();
+    if boot::enter() == boot::Mode::Safe {
+        let p = embassy_rp::init(Config::default());
+        interrupt::SWI_IRQ_1.set_priority(Priority::P3);
+        let spawner = EXECUTOR.start(interrupt::SWI_IRQ_1);
+        spawner.spawn(safe_mode().unwrap());
+        spawner.spawn(usb_logger(usb::Driver::new(p.USB, Irqs)).unwrap());
+        loop {
+            cortex_m::asm::wfi();
+        }
+    }
+
+    if config::FLASH_DIVIDER > 2 {
+        set_flash_divider(config::FLASH_DIVIDER);
+    }
+    let mut clocks = ClockConfig::system_freq(config::SYS_HZ).unwrap();
+    clocks.core_voltage = config::CORE_VOLTAGE;
+    // Nothing here needs a fast peripheral clock, and it has no overclock margin.
+    clocks.peri_clk_src = Some(PeriClkSrc::PllUsb);
     let p = embassy_rp::init(Config::new(clocks));
 
-    spawn_core1(p.CORE1, CORE1_STACK.take(), || miner::mine(1));
+    scan::load();
+    // SAFETY: this is the only reference ever made to the stack.
+    let core1_stack = unsafe { &mut *addr_of_mut!(CORE1_STACK) };
+    spawn_core1(p.CORE1, core1_stack, || miner::mine(1));
 
     interrupt::SWI_IRQ_1.set_priority(Priority::P3);
     let spawner = EXECUTOR.start(interrupt::SWI_IRQ_1);
@@ -237,6 +323,8 @@ fn main() -> ! {
         wifi_clk: p.PIN_29,
         pio0: p.PIO0,
         dma: p.DMA_CH0,
+        adc: p.ADC,
+        temperature: p.ADC_TEMP_SENSOR,
     };
     spawner.spawn(startup(board).unwrap());
 

@@ -117,7 +117,11 @@ async fn session(
                     if let Some(current) = &session {
                         match Job::build(&notify, current) {
                             Ok(built) => {
-                                let generation = miner::publish(Work::from_header(&built.header));
+                                let generation = if cfg!(feature = "stress") {
+                                    0
+                                } else {
+                                    miner::publish(Work::from_header(&built.header))
+                                };
                                 if let Some(height) = built.height {
                                     stats::update(|stats| stats.height = height);
                                 }
@@ -240,11 +244,19 @@ pub async fn run(stack: Stack<'static>, mut control: Control<'static>) -> ! {
         }
 
         stats::set_status(Status::Connecting);
+        let started = Instant::now();
         if let Err(reason) = session(stack, &mut control, rx, tx, lines).await {
-            warn!("pool session ended: {}", reason);
+            warn!(
+                "pool session ended after {} s, {} s since boot, link {}, address {}: {}",
+                started.elapsed().as_secs(),
+                Instant::now().as_secs(),
+                stack.is_link_up(),
+                stack.is_config_up(),
+                reason,
+            );
         }
         miner::stop();
         stats::set_status(Status::PoolError);
-        Timer::after_secs(10).await;
+        Timer::after_secs(3).await;
     }
 }

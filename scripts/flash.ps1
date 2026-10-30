@@ -1,7 +1,7 @@
 # Builds the firmware and flashes it through the UF2 bootloader. A Pico already
 # running PicoMiner is rebooted over USB serial; otherwise hold BOOTSEL while
 # plugging it in.
-param([switch]$NoBuild)
+param([switch]$NoBuild, [int]$WaitSeconds = 15)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -37,7 +37,7 @@ if (-not (Find-Bootloader)) {
     }
 }
 
-$deadline = (Get-Date).AddSeconds(15)
+$deadline = (Get-Date).AddSeconds($WaitSeconds)
 while (-not ($drive = Find-Bootloader)) {
     if ((Get-Date) -gt $deadline) { throw 'No RPI-RP2 drive: hold BOOTSEL while plugging the Pico in.' }
     Start-Sleep -Milliseconds 300

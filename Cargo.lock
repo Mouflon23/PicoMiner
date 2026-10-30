@@ -1205,6 +1205,7 @@ dependencies = [
  "embassy-time",
  "embassy-usb-logger",
  "embedded-graphics",
+ "fixed",
  "heapless 0.9.3",
  "log",
  "picominer-core",

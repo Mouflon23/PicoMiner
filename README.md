@@ -4,13 +4,18 @@ A solo Bitcoin lottery miner in Rust for the **Raspberry Pi Pico W** with a
 **Waveshare Pico-OLED-1.3** screen. It is a from-scratch take on the idea behind
 [NerdMiner v2](https://github.com/BitMaker-hub/NerdMiner_v2), which runs on the ESP32.
 
-Measured on real hardware: **32 kH/s** across both cores at 200 MHz.
+Measured on real hardware, across both cores:
+
+| Clock | Core voltage | Hashrate |
+| --- | --- | --- |
+| 200 MHz, the highest the datasheet covers | 1.15 V | 59 kH/s |
+| 432 MHz, overclocked, on one tested board | 1.30 V | **128 kH/s** |
 
 ## The odds
 
 This is a toy. At the current network difficulty (about 148 T) a block takes
-6.4 × 10²³ hashes on average, so one PicoMiner needs around 630 billion years,
-some 45 times the age of the universe. The fun is watching it try. It earns
+6.4 × 10²³ hashes on average, so one PicoMiner at 128 kH/s needs around 160
+billion years, some 11 times the age of the universe. The fun is watching it try. It earns
 nothing unless that miracle happens, in which case the pool pays the block reward
 to your address.
 
@@ -38,8 +43,8 @@ cargo install elf2uf2-rs --locked
 
 Copy `.env.example` to `.env` and fill in your Wi-Fi network and a BTC address.
 `.env` is ignored by git, but its values are baked into the firmware, so do not
-share your `.uf2`. Without it the firmware stays in **benchmark mode**: it hashes
-a made-up job, which is handy for measuring speed.
+share your `.uf2`. Without Wi-Fi settings the firmware stays in **benchmark mode**:
+it hashes a made-up job, which is handy for measuring speed.
 
 Then flash. The first time, hold BOOTSEL while plugging the Pico in. Afterwards
 the script reboots a running PicoMiner over USB by itself.
@@ -49,17 +54,38 @@ the script reboots a running PicoMiner over USB by itself.
 ./scripts/monitor.ps1
 ```
 
-The screen has three pages: hashrate and shares, pool details, and Wi-Fi. The
-onboard LED flashes on each accepted share.
+The screen has three pages: hashrate and shares, pool details, and Wi-Fi with the
+chip temperature. The onboard LED flashes on each accepted share.
+
+## Overclocking
+
+The firmware runs at 200 MHz by default. Above that you leave the datasheet, and
+every chip has its own limit. `SYS_MHZ` and `CORE_MV` in `.env` set the clock and
+voltage, and this script tries several pairs on the connected board:
+
+```powershell
+./scripts/sweep.ps1 -Steps 300:1250,400:1300,432:1300 -Seconds 60
+```
+
+Each step runs the `stress` build, which checks the assembly against the Rust
+SHA-256 on every nonce and reports the mismatches as `bad`. Failing is safe: a boot
+that crashes or hangs comes back in **safe mode**, at stock clocks with USB running,
+and logs what happened. It tries a normal boot again after 10 minutes, and a power
+cycle forgets everything.
+
+The tested board ran 18 million checked hashes at 432 MHz and 1.30 V without an
+error, at 41 °C with no heatsink, and crashes from 440 MHz. The clock moves in steps
+of 4 MHz up there. 1.30 V is the regulator's ceiling before it has to be unlocked,
+and PicoMiner does not go past it.
 
 ## Choosing a pool
 
 The default is `pool.solomining.de:3333`. What matters is how low a pool lets the
-difficulty go, because at 32 kH/s a difficulty 1 share takes about 37 hours:
+difficulty go, because at 128 kH/s a difficulty 1 share takes about 9 hours:
 
 | Pool | Result, tested October 2026 |
 | --- | --- |
-| `pool.solomining.de:3333` | Honours the suggested 0.00015: a share about every 20 s |
+| `pool.solomining.de:3333` | Goes as low as 0.00015, then adapts: a share about every 20 s |
 | `public-pool.io:3333` | Floors at difficulty 1 |
 | `pool.nerdminer.io:3333` | Floors at difficulty 1 |
 | `solo.ckpool.org:3333` | Floors at difficulty 1 |
@@ -79,12 +105,18 @@ decides how often you get visible proof that the miner works.
     miner in thread mode and everything async (Wi-Fi, Stratum, screen, USB) on an
     interrupt executor that preempts it, so network latency stays low while no
     cycle is wasted.
-  - The nonce loop runs from SRAM. It skips what does not change between nonces:
-    the midstate, the first three rounds and part of the schedule. It also stops
-    at round 60 of the second hash, where the top 32 bits are already known.
-  - The chip runs at 200 MHz and 1.15 V, the highest setting the RP2040 datasheet
-    covers.
-  - A panic reboots the board, and the message is logged on the next boot.
+  - The nonce loop is 6,750 cycles per hash, against about 12,500 for the same
+    logic in Rust. `tools/gen_scan.py` writes it as Thumb assembly, fully unrolled,
+    and first proves it against `hashlib` on a small simulator that also counts the
+    cycles. Run it after changing the loop; its header lists the tricks involved.
+  - Each core runs its own copy of that loop, with its stack, alone in one of the
+    four SRAM banks, so the cores never wait for each other. The other two banks
+    hold everything else.
+  - After a good boot, a panic or a hang costs a reboot and nothing more, and the
+    message is logged on the next boot.
+  - DHCP refusals are ignored on purpose. On a network with a second DHCP server,
+    that server refuses the lease of the first one, which would otherwise drop the
+    address and the pool right after connecting.
 
 ## Licenses
 
