@@ -176,6 +176,9 @@ pub fn sha256d(data: &[u8]) -> [u8; 32] {
 /// A header reduced to what changes nothing between nonces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Work {
+    /// The first 64 header bytes as big-endian words. A hardware SHA-256 that
+    /// cannot resume from the midstate has to hash them again for every nonce.
+    first: [u32; 16],
     /// SHA-256 state after the first 64 header bytes.
     midstate: [u32; 8],
     /// State after rounds 0..=2 of the second block, which precede the nonce.
@@ -191,8 +194,9 @@ impl Work {
     pub fn from_header(header: &[u8; 80]) -> Self {
         let mut first = [0u8; 64];
         first.copy_from_slice(&header[..64]);
+        let first = be_words(&first);
         let mut midstate = IV;
-        compress(&mut midstate, &be_words(&first));
+        compress(&mut midstate, &first);
 
         let word = |i: usize| {
             u32::from_be_bytes([header[64 + i], header[65 + i], header[66 + i], header[67 + i]])
@@ -208,7 +212,17 @@ impl Work {
         let w16 = small0(tail[1]).wrapping_add(tail[0]);
         let w17 = small1(640).wrapping_add(small0(tail[2])).wrapping_add(tail[1]);
 
-        Self { midstate, state3: [f, g, h, a, b, c, d, e], tail, w16, w17 }
+        Self { first, midstate, state3: [f, g, h, a, b, c, d, e], tail, w16, w17 }
+    }
+
+    /// The first block of the header, as message words.
+    pub fn first_block(&self) -> &[u32; 16] {
+        &self.first
+    }
+
+    /// Header bytes 64..76, which start the second block, as message words.
+    pub fn tail(&self) -> &[u32; 3] {
+        &self.tail
     }
 
     /// Full double SHA-256 of the header with `nonce`, in digest byte order.
@@ -238,6 +252,7 @@ impl Work {
     /// Tries `count` nonces from `start` and returns the first whose hash has a
     /// top little-endian word at most `limit`. The hit still has to be confirmed
     /// against the exact target with [`Work::hash`]: only the top word is computed.
+    #[inline]
     pub fn scan(&self, start: u32, count: u32, limit: u32) -> Option<u32> {
         let mut w = [0u32; 64];
         w[0] = self.tail[0];
@@ -264,12 +279,15 @@ impl Work {
             round!(d, e, f, g, h, a, b, c, K[5], w[5]);
             round!(c, d, e, f, g, h, a, b, K[6], w[6]);
             round!(b, c, d, e, f, g, h, a, K[7], w[7]);
+            // Constant indices let the round constants become immediates in the code.
             let mut s = [a, b, c, d, e, f, g, h];
-            let mut i = 8;
-            while i < 64 {
-                eight_rounds!(s, w, i);
-                i += 8;
-            }
+            eight_rounds!(s, w, 8);
+            eight_rounds!(s, w, 16);
+            eight_rounds!(s, w, 24);
+            eight_rounds!(s, w, 32);
+            eight_rounds!(s, w, 40);
+            eight_rounds!(s, w, 48);
+            eight_rounds!(s, w, 56);
 
             for i in 0..8 {
                 w2[i] = self.midstate[i].wrapping_add(s[i]);
@@ -278,11 +296,13 @@ impl Work {
             expand(&mut w2, 16, 61);
 
             let mut s = IV;
-            let mut i = 0;
-            while i < 56 {
-                eight_rounds!(s, w2, i);
-                i += 8;
-            }
+            eight_rounds!(s, w2, 0);
+            eight_rounds!(s, w2, 8);
+            eight_rounds!(s, w2, 16);
+            eight_rounds!(s, w2, 24);
+            eight_rounds!(s, w2, 32);
+            eight_rounds!(s, w2, 40);
+            eight_rounds!(s, w2, 48);
             let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = s;
             round!(a, b, c, d, e, f, g, h, K[56], w2[56]);
             round!(h, a, b, c, d, e, f, g, K[57], w2[57]);

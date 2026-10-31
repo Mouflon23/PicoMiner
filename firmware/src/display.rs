@@ -6,12 +6,15 @@
 
 use core::convert::Infallible;
 
-use embassy_rp::gpio::Output;
+use embassy_rp::Peri;
+use embassy_rp::gpio::{Flex, Output, Pin, Pull};
 use embassy_rp::peripherals::SPI1;
 use embassy_rp::spi::{Blocking, Spi};
 use embassy_time::Timer;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
+
+use crate::config;
 
 pub const WIDTH: u32 = 128;
 pub const HEIGHT: u32 = 64;
@@ -36,6 +39,26 @@ const INIT: &[u8] = &[
     0xAD, 0x8A, // DC-DC
     0xAF, // display on
 ];
+
+/// Whether a line springs back up once it is no longer driven low. A line left
+/// unconnected keeps the level it was given for far longer than this.
+fn pulled_up(pin: Peri<'_, impl Pin>) -> bool {
+    let settle = config::SYS_HZ / 100_000;
+    let mut line = Flex::new(pin);
+    line.set_pull(Pull::None);
+    line.set_low();
+    line.set_as_output();
+    cortex_m::asm::delay(settle);
+    line.set_as_input();
+    cortex_m::asm::delay(settle);
+    line.is_high()
+}
+
+/// Whether the module is plugged in. It never answers on SPI, but it pulls its
+/// clock and data lines up. Run this before the SPI bus takes the pins.
+pub fn detect(clk: Peri<'_, impl Pin>, data: Peri<'_, impl Pin>) -> bool {
+    pulled_up(clk) && pulled_up(data)
+}
 
 pub struct Display {
     spi: Spi<'static, SPI1, Blocking>,

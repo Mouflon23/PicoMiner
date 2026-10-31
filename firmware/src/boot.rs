@@ -12,8 +12,15 @@ use embassy_rp::{pac, rom_data};
 
 const MAGIC: u32 = 0x5049_4300;
 
-/// The longest the counter allows, about 8 s.
-const TIMEOUT: u32 = 0x00ff_ffff;
+/// About 8 s. The RP2040 counts down twice per tick, see its erratum E1.
+const TIMEOUT: u32 = if cfg!(rp2350) { 8_000_000 } else { 0x00ff_ffff };
+
+/// Every power domain but the oscillators, which are bits 0 and 1 on the RP2040
+/// and 2 and 3 on the RP2350.
+#[cfg(not(rp2350))]
+const RESET_TARGETS: u32 = 0x0001_ffff & !0b11;
+#[cfg(rp2350)]
+const RESET_TARGETS: u32 = 0x01ff_ffff & !0b1100;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -31,13 +38,24 @@ pub fn enter() -> Mode {
     pac::WATCHDOG.scratch2().write_value(MAGIC | (failed + 1));
 
     select_reset_targets();
+    start_tick();
+    feed();
+    pac::WATCHDOG.ctrl().modify(|w| w.set_enable(true));
+    if failed == 0 { Mode::Normal } else { Mode::Safe }
+}
+
+#[cfg(not(rp2350))]
+fn start_tick() {
     pac::WATCHDOG.tick().write(|w| {
         w.set_enable(true);
         w.set_cycles(12);
     });
-    feed();
-    pac::WATCHDOG.ctrl().modify(|w| w.set_enable(true));
-    if failed == 0 { Mode::Normal } else { Mode::Safe }
+}
+
+#[cfg(rp2350)]
+fn start_tick() {
+    pac::TICKS.watchdog_cycles().write(|w| w.0 = 12);
+    pac::TICKS.watchdog_ctrl().write(|w| w.set_enable(true));
 }
 
 pub fn feed() {
@@ -65,9 +83,9 @@ pub fn enter_bootloader() -> ! {
     }
 }
 
-/// Resets the whole chip but the oscillators, as `embassy_rp::watchdog` does.
+/// Resets the whole chip but the oscillators.
 fn select_reset_targets() {
-    pac::PSM.wdsel().write_value(pac::psm::regs::Wdsel(0x0001_ffff & !0b11));
+    pac::PSM.wdsel().write_value(pac::psm::regs::Wdsel(RESET_TARGETS));
 }
 
 pub fn reboot() -> ! {

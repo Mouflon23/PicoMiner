@@ -14,7 +14,7 @@ use picominer_core::settings::{RECORD_SIZE, Settings};
 
 use crate::config;
 
-const FLASH_SIZE: usize = 2 * 1024 * 1024;
+const FLASH_SIZE: usize = if cfg!(rp2350) { 4 } else { 2 } * 1024 * 1024;
 const OFFSET: u32 = (FLASH_SIZE - ERASE_SIZE) as u32;
 const XIP_BASE: usize = 0x1000_0000;
 const MAGIC: u32 = 0x5049_4353;

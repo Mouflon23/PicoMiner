@@ -8,6 +8,13 @@ use picominer_core::sha256::{CONTEXT_WORDS, Work};
 
 global_asm!(include_str!("scan.s"), options(raw));
 
+/// What the loop precomputes once per job.
+pub type Context = [u32; CONTEXT_WORDS];
+
+pub fn context(work: &Work) -> Context {
+    work.context()
+}
+
 type ScanFn = unsafe extern "C" fn(*const u32, u32, u32, u32) -> u64;
 
 unsafe extern "C" {
@@ -43,7 +50,7 @@ impl Scanner {
     }
 
     /// Same contract as [`Work::scan`]. `count` must not be zero.
-    pub fn scan(self, context: &[u32; CONTEXT_WORDS], start: u32, count: u32, limit: u32) -> Option<u32> {
+    pub fn scan(self, context: &Context, start: u32, count: u32, limit: u32) -> Option<u32> {
         // SAFETY: the context has the size the loop reads, and `load` ran at boot.
         let result = unsafe { (self.0)(context.as_ptr(), start, count, limit) };
         (result as u32 != 0).then_some((result >> 32) as u32)
@@ -51,7 +58,7 @@ impl Scanner {
 
     /// Whether the loop finds nonce `nonce` with the tightest limit that allows
     /// it and misses it with the next one, per the Rust implementation.
-    pub fn agrees(self, work: &Work, context: &[u32; CONTEXT_WORDS], nonce: u32) -> bool {
+    pub fn agrees(self, work: &Work, context: &Context, nonce: u32) -> bool {
         let digest = work.hash(nonce);
         let top = u32::from_le_bytes([digest[28], digest[29], digest[30], digest[31]]);
         self.scan(context, nonce, 1, top) == Some(nonce)
