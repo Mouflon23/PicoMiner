@@ -10,6 +10,7 @@ use embassy_net::{IpAddress, Stack};
 use embassy_time::{Duration, Instant, Timer};
 use heapless::String;
 use log::{info, warn};
+use picominer_core::settings::Settings;
 use picominer_core::sha256::Work;
 use picominer_core::stratum::{self, Job, LineBuffer, Message, Session};
 use picominer_core::target::meets_target;
@@ -43,13 +44,17 @@ async fn send(socket: &mut TcpSocket<'_>, request: &Request) -> Result<(), &'sta
     Ok(())
 }
 
-async fn join(control: &mut Control<'static>) {
+async fn join(control: &mut Control<'static>, settings: &Settings) {
     stats::set_status(Status::Joining);
     loop {
-        let options = JoinOptions::new(config::WIFI_PASSWORD.as_bytes());
-        match control.join(config::WIFI_SSID, options).await {
+        let options = if settings.wifi_password.is_empty() {
+            JoinOptions::new_open()
+        } else {
+            JoinOptions::new(settings.wifi_password.as_bytes())
+        };
+        match control.join(&settings.wifi_ssid, options).await {
             Ok(()) => {
-                info!("joined {}", config::WIFI_SSID);
+                info!("joined {}", settings.wifi_ssid.as_str());
                 return;
             }
             Err(error) => {
@@ -60,9 +65,9 @@ async fn join(control: &mut Control<'static>) {
     }
 }
 
-async fn resolve(stack: Stack<'static>) -> Result<IpAddress, &'static str> {
+async fn resolve(stack: Stack<'static>, host: &str) -> Result<IpAddress, &'static str> {
     let addresses = stack
-        .dns_query(config::POOL_HOST, DnsQueryType::A)
+        .dns_query(host, DnsQueryType::A)
         .await
         .map_err(|_| "DNS failed")?;
     addresses.first().copied().ok_or("no DNS answer")
@@ -72,12 +77,16 @@ async fn resolve(stack: Stack<'static>) -> Result<IpAddress, &'static str> {
 async fn session(
     stack: Stack<'static>,
     control: &mut Control<'static>,
+    settings: &Settings,
     rx: &mut [u8],
     tx: &mut [u8],
     lines: &mut LineBuffer<4096>,
 ) -> Result<(), &'static str> {
-    let address = resolve(stack).await?;
-    let port = config::POOL_PORT.parse::<u16>().map_err(|_| "bad POOL_PORT")?;
+    let address = resolve(stack, &settings.pool_host).await?;
+    let port = settings.pool_port;
+    if port == 0 {
+        return Err("no pool port");
+    }
     info!("connecting to {}:{}", address, port);
 
     let mut socket = TcpSocket::new(stack, rx, tx);
@@ -86,7 +95,12 @@ async fn session(
     socket.connect((address, port)).await.map_err(|_| "connect failed")?;
 
     let mut user: String<128> = String::new();
-    write!(user, "{}.{}", config::BTC_ADDRESS, config::WORKER).map_err(|_| "user too long")?;
+    if settings.worker.is_empty() {
+        write!(user, "{}", settings.btc_address)
+    } else {
+        write!(user, "{}.{}", settings.btc_address, settings.worker)
+    }
+    .map_err(|_| "user too long")?;
 
     let mut request = Request::new();
     stratum::write_subscribe(&mut request, ID_SUBSCRIBE, config::AGENT).map_err(|_| "subscribe")?;
@@ -229,11 +243,11 @@ async fn session(
 }
 
 #[embassy_executor::task]
-pub async fn run(stack: Stack<'static>, mut control: Control<'static>) -> ! {
+pub async fn run(stack: Stack<'static>, mut control: Control<'static>, settings: &'static Settings) -> ! {
     let (rx, tx, lines) = (RX.take(), TX.take(), LINES.take());
     loop {
         if !stack.is_link_up() {
-            join(&mut control).await;
+            join(&mut control, settings).await;
         }
         stats::set_status(Status::Dhcp);
         stack.wait_config_up().await;
@@ -245,7 +259,7 @@ pub async fn run(stack: Stack<'static>, mut control: Control<'static>) -> ! {
 
         stats::set_status(Status::Connecting);
         let started = Instant::now();
-        if let Err(reason) = session(stack, &mut control, rx, tx, lines).await {
+        if let Err(reason) = session(stack, &mut control, settings, rx, tx, lines).await {
             warn!(
                 "pool session ended after {} s, {} s since boot, link {}, address {}: {}",
                 started.elapsed().as_secs(),

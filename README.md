@@ -26,7 +26,7 @@ The OLED module plugs straight onto the Pico W headers.
 | Function | GPIO |
 | --- | --- |
 | OLED DC / CS / CLK / DIN / RST | 8 / 9 / 10 / 11 / 12 |
-| KEY0: next page, wakes the screen | 15 |
+| KEY0: next page, wakes the screen; held at power-up, opens the setup portal | 15 |
 | KEY1: screen on or off | 17 |
 
 ## Getting started
@@ -41,10 +41,10 @@ rustup target add thumbv6m-none-eabi
 cargo install elf2uf2-rs --locked
 ```
 
-Copy `.env.example` to `.env` and fill in your Wi-Fi network and a BTC address.
-`.env` is ignored by git, but its values are baked into the firmware, so do not
-share your `.uf2`. Without Wi-Fi settings the firmware stays in **benchmark mode**:
-it hashes a made-up job, which is handy for measuring speed.
+The Wi-Fi network, the BTC address and the pool are set from a phone, in the
+setup portal described below. To skip it, copy `.env.example` to `.env` and fill
+them in there: they become the defaults baked into the firmware. `.env` is ignored
+by git, but then do not share your `.uf2`.
 
 Then flash. The first time, hold BOOTSEL while plugging the Pico in. Afterwards
 the script reboots a running PicoMiner over USB by itself.
@@ -56,6 +56,23 @@ the script reboots a running PicoMiner over USB by itself.
 
 The screen has three pages: hashrate and shares, pool details, and Wi-Fi with the
 chip temperature. The onboard LED flashes on each accepted share.
+
+## Setup portal
+
+As with NerdMiner v2, a PicoMiner with nothing configured opens its own Wi-Fi
+network instead of mining. So does any PicoMiner when you hold **KEY0** while
+plugging it in. The screen shows the details and the LED blinks slowly.
+
+1. Join the network `PicoMinerAP`, password `MineYourCoins`. Your phone may warn
+   that it has no internet; stay connected.
+2. Open http://192.168.4.1.
+3. Pick your Wi-Fi network, then enter its password, your BTC address and the
+   pool. Leaving the password empty keeps the saved one.
+4. Press **Save and restart**. PicoMiner restarts and starts mining.
+
+The settings are kept in the last 4 KB of flash, survive reflashing and replace
+those from `.env`. They are written right after the restart, before the clocks go
+up, because writing flash while overclocked would crash the board.
 
 ## Overclocking
 
@@ -114,6 +131,8 @@ decides how often you get visible proof that the miner works.
     hold everything else.
   - After a good boot, a panic or a hang costs a reboot and nothing more, and the
     message is logged on the next boot.
+  - The setup portal runs its own small DHCP and HTTP servers, with the request
+    parsing and the settings format in `core/` so they are tested on the PC.
   - DHCP refusals are ignored on purpose. On a network with a second DHCP server,
     that server refuses the lease of the first one, which would otherwise drop the
     address and the pool right after connecting.

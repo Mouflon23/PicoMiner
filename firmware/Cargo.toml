@@ -19,7 +19,7 @@ stress = []
 picominer-core = { path = "../core" }
 embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "boot2-w25q080", "executor-interrupt", "unstable-pac"] }
 embassy-executor = "0.10"
-embassy-net = { version = "0.9", features = ["tcp", "dns", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
+embassy-net = { version = "0.9", features = ["tcp", "udp", "dns", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
 embassy-time = "0.5"
 embassy-sync = "0.8"
 embassy-futures = "0.1"
