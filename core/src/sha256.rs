@@ -279,12 +279,15 @@ impl Work {
             round!(d, e, f, g, h, a, b, c, K[5], w[5]);
             round!(c, d, e, f, g, h, a, b, K[6], w[6]);
             round!(b, c, d, e, f, g, h, a, K[7], w[7]);
+            // Constant indices let the round constants become immediates in the code.
             let mut s = [a, b, c, d, e, f, g, h];
-            let mut i = 8;
-            while i < 64 {
-                eight_rounds!(s, w, i);
-                i += 8;
-            }
+            eight_rounds!(s, w, 8);
+            eight_rounds!(s, w, 16);
+            eight_rounds!(s, w, 24);
+            eight_rounds!(s, w, 32);
+            eight_rounds!(s, w, 40);
+            eight_rounds!(s, w, 48);
+            eight_rounds!(s, w, 56);
 
             for i in 0..8 {
                 w2[i] = self.midstate[i].wrapping_add(s[i]);
@@ -293,11 +296,13 @@ impl Work {
             expand(&mut w2, 16, 61);
 
             let mut s = IV;
-            let mut i = 0;
-            while i < 56 {
-                eight_rounds!(s, w2, i);
-                i += 8;
-            }
+            eight_rounds!(s, w2, 0);
+            eight_rounds!(s, w2, 8);
+            eight_rounds!(s, w2, 16);
+            eight_rounds!(s, w2, 24);
+            eight_rounds!(s, w2, 32);
+            eight_rounds!(s, w2, 40);
+            eight_rounds!(s, w2, 48);
             let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = s;
             round!(a, b, c, d, e, f, g, h, K[56], w2[56]);
             round!(h, a, b, c, d, e, f, g, K[57], w2[57]);

@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 
 $deadline = (Get-Date).AddSeconds(20)
 do {
-    $name = Select-PicoMinerPort $Port
+    $name = if ($Port) { @(Get-PicoMinerPorts) -eq $Port } else { Select-PicoMinerPort }
     if (-not $name) {
         if ((Get-Date) -gt $deadline) { throw 'PicoMiner serial port not found.' }
         Start-Sleep -Milliseconds 300

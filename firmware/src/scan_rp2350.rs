@@ -32,6 +32,13 @@ fn write(word: u32) {
     pac::SHA256.wdata().write_value(word);
 }
 
+/// Written out rather than looped, as the loop would cost about as much as the writes.
+macro_rules! write_all {
+    ($($word:expr),+ $(,)?) => {
+        $(write($word);)+
+    };
+}
+
 #[inline(always)]
 fn wait_ready() {
     while !pac::SHA256.csr().read().wdata_rdy() {}
@@ -50,19 +57,13 @@ fn scan_hardware(work: &Work, start: u32, count: u32, limit: u32) -> Option<u32>
     let mut nonce = start;
     for _ in 0..count {
         restart();
-        for &word in first {
-            write(word);
-        }
+        write_all!(
+            first[0], first[1], first[2], first[3], first[4], first[5], first[6], first[7],
+            first[8], first[9], first[10], first[11], first[12], first[13], first[14], first[15],
+        );
         wait_ready();
-        for &word in tail {
-            write(word);
-        }
-        write(nonce.swap_bytes());
-        write(0x8000_0000);
-        for _ in 0..10 {
-            write(0);
-        }
-        write(640);
+        write_all!(tail[0], tail[1], tail[2], nonce.swap_bytes(), 0x8000_0000);
+        write_all!(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 640);
         wait_digest();
 
         let digest = [
@@ -76,14 +77,10 @@ fn scan_hardware(work: &Work, start: u32, count: u32, limit: u32) -> Option<u32>
             sha.sum7().read(),
         ];
         restart();
-        for word in digest {
-            write(word);
-        }
-        write(0x8000_0000);
-        for _ in 0..6 {
-            write(0);
-        }
-        write(256);
+        write_all!(
+            digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+        );
+        write_all!(0x8000_0000, 0, 0, 0, 0, 0, 0, 256);
         wait_digest();
 
         if sha.sum7().read().swap_bytes() <= limit {

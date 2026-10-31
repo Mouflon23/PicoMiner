@@ -122,7 +122,7 @@ fn read_temperature(adc: &mut Adc<'static, Blocking>, sensor: &mut Channel<'stat
 
 #[embassy_executor::task]
 pub async fn run(
-    mut display: Display,
+    mut display: Option<Display>,
     key0: Input<'static>,
     key1: Input<'static>,
     mut adc: Adc<'static, Blocking>,
@@ -145,21 +145,23 @@ pub async fn run(
     loop {
         ticker.next().await;
 
-        let pressed = (key0.is_low(), key1.is_low());
         let mut redraw = false;
-        if pressed.0 && !held.0 {
-            page = (page + 1) % PAGES;
-            redraw = true;
-            if !powered {
-                powered = true;
-                display.set_power(true);
+        if let Some(display) = &mut display {
+            let pressed = (key0.is_low(), key1.is_low());
+            if pressed.0 && !held.0 {
+                page = (page + 1) % PAGES;
+                redraw = true;
+                if !powered {
+                    powered = true;
+                    display.set_power(true);
+                }
             }
+            if pressed.1 && !held.1 {
+                powered = !powered;
+                display.set_power(powered);
+            }
+            held = pressed;
         }
-        if pressed.1 && !held.1 {
-            powered = !powered;
-            display.set_power(powered);
-        }
-        held = pressed;
 
         ticks += 1;
         if ticks.is_multiple_of(20) {
@@ -193,14 +195,17 @@ pub async fn run(
             }
         }
 
-        if redraw && powered {
+        if redraw
+            && powered
+            && let Some(display) = &mut display
+        {
             let stats = stats::get();
             display.clear();
             match page {
-                _ if portal => portal_page(&mut display),
-                0 => miner_page(&mut display, &stats, hashrate),
-                1 => pool_page(&mut display, settings, &stats, started.elapsed().as_secs() as u32),
-                _ => network_page(&mut display, settings, &stats, total),
+                _ if portal => portal_page(display),
+                0 => miner_page(display, &stats, hashrate),
+                1 => pool_page(display, settings, &stats, started.elapsed().as_secs() as u32),
+                _ => network_page(display, settings, &stats, total),
             }
             display.flush();
         }

@@ -43,6 +43,7 @@ pub fn publish(work: Work) -> u32 {
         generation
     });
     drain_found();
+    cortex_m::asm::sev();
     generation
 }
 
@@ -118,7 +119,9 @@ pub fn mine(core: usize) -> ! {
             nonce = half;
         }
         let Some((work, context)) = &job else {
-            cortex_m::asm::nop();
+            // Spinning here would hammer the flash cache, which is what fails first
+            // when overclocked. `publish` wakes the core.
+            cortex_m::asm::wfe();
             continue;
         };
 

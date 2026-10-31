@@ -23,7 +23,7 @@ foreach ($step in ($Steps -split ',')) {
     }
     $lines = ($log -join '') -split "`r?`n"
     $last = $lines | Where-Object { $_ -match ' H/s, core0 ' } | Select-Object -Last 1
-    $trouble = $lines | Where-Object { $_ -match 'safe mode|previous boot|self-test|NO USB|panicked' } | Select-Object -First 2
+    $trouble = $lines | Where-Object { $_ -match 'safe mode|previous boot|self-test|NO USB|panicked' } | Select-Object -Unique
     "[$mhz MHz, $mv mV] $last"
     foreach ($line in $trouble) { "    $line" }
 }

@@ -46,6 +46,14 @@ pub const WIFI_DIVIDER: u32 = SYS_MHZ.div_ceil(67);
 #[cfg(not(rp2350))]
 pub const FLASH_DIVIDER: u32 = SYS_MHZ.div_ceil(100).next_multiple_of(2);
 
+/// The boot ROM leaves the flash at clk_sys / 3, or 50 MHz at the stock clock, and
+/// this keeps it there: nothing that runs often comes from flash.
+#[cfg(rp2350)]
+pub const FLASH_DIVIDER: u32 = SYS_MHZ.div_ceil(50);
+
+/// What the flash runs at without touching it.
+pub const STOCK_FLASH_DIVIDER: u32 = if cfg!(rp2350) { 3 } else { 2 };
+
 /// Roughly one share every 20 s when overclocked, and every 40 s at stock.
 pub const SUGGESTED_DIFFICULTY: f64 = 0.0005;
 

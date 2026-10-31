@@ -13,7 +13,8 @@ Measured on real hardware, across both cores:
 | --- | --- | --- | --- |
 | Pico W | 200 MHz, the highest the datasheet covers | 1.15 V | 59 kH/s |
 | Pico W | 432 MHz, overclocked, on one tested board | 1.30 V | 128 kH/s |
-| Pico 2 W | 150 MHz, stock | 1.10 V | **356 kH/s** |
+| Pico 2 W | 150 MHz, stock | 1.10 V | 356 kH/s |
+| Pico 2 W | 412 MHz, overclocked, on one tested board | 1.30 V | **976 kH/s** |
 
 ## The odds
 
@@ -25,9 +26,10 @@ to your address.
 
 ## Hardware
 
-The OLED module plugs straight onto the headers of either board. It is optional:
-without it the firmware runs the same, and you follow it on the USB log, the LED
-and the pool's page.
+The OLED module plugs straight onto the headers of either board. It is optional
+and detected at boot: the panel never answers over SPI, but the module pulls its
+clock and data lines up, and an unconnected pin does not spring back. Without it
+you follow the miner on the USB log, the LED and the pool's page.
 
 | Function | GPIO |
 | --- | --- |
@@ -67,8 +69,10 @@ chip temperature. The onboard LED flashes on each accepted share.
 
 As with NerdMiner v2, a PicoMiner with nothing configured opens its own Wi-Fi
 network instead of mining. So does any PicoMiner when you hold **KEY0** while
-plugging it in. The screen shows the details and the LED blinks slowly. Without
-the screen, connecting GPIO 15 to ground does the same as KEY0.
+plugging it in. The screen shows the details and the LED blinks slowly.
+
+The portal needs the screen, which says how to reach it. A board without one never
+opens it: give it its settings through `.env`, or it stays in benchmark mode.
 
 1. Join the network `PicoMinerAP`, password `MineYourCoins`. Your phone may warn
    that it has no internet; stay connected.
@@ -83,17 +87,14 @@ up, because writing flash while overclocked would crash the board.
 
 ## Overclocking
 
-This section is about the Pico W. The Pico 2 W runs at its stock 150 MHz, and
-overclocking it is not supported yet: its flash clock would have to follow. Its
-settings are separate, `SYS_MHZ_RP2350` and `CORE_MV_RP2350`, so a limit found on
-one chip never reaches the other.
-
-The firmware runs at 200 MHz by default. Above that you leave the datasheet, and
-every chip has its own limit. `SYS_MHZ` and `CORE_MV` in `.env` set the clock and
-voltage, and this script tries several pairs on the connected board:
+The firmware runs at 200 MHz on the Pico W and 150 MHz on the Pico 2 W by default.
+Above that you leave the datasheet, and every chip has its own limit. `SYS_MHZ` and
+`CORE_MV` in `.env` set the clock and voltage of the Pico W, `SYS_MHZ_RP2350` and
+`CORE_MV_RP2350` those of the Pico 2 W, so a limit found on one chip never reaches
+the other. This script tries several pairs on one board:
 
 ```powershell
-./scripts/sweep.ps1 -Steps 300:1250,400:1300,432:1300 -Seconds 60
+./scripts/sweep.ps1 -Steps 300:1250,400:1300,432:1300 -Seconds 60 -Port COM7
 ```
 
 Each step runs the `stress` build, which checks the hashing loops against the Rust
@@ -102,10 +103,15 @@ that crashes or hangs comes back in **safe mode**, at stock clocks with USB runn
 and logs what happened. It tries a normal boot again after 10 minutes, and a power
 cycle forgets everything.
 
-The tested board ran 18 million checked hashes at 432 MHz and 1.30 V without an
-error, at 41 °C with no heatsink, and crashes from 440 MHz. The clock moves in steps
-of 4 MHz up there. 1.30 V is the regulator's ceiling before it has to be unlocked,
-and PicoMiner does not go past it.
+The tested Pico W ran 18 million checked hashes at 432 MHz and 1.30 V without an
+error, at 41 °C with no heatsink, and crashes from 440 MHz. The tested Pico 2 W held
+412 MHz at 1.30 V, at 42 °C with no heatsink, and crashes from 416 MHz. The clock
+moves in steps of a few MHz up there. 1.30 V is the regulator's ceiling before its
+limit has to be disabled, and PicoMiner does not go past it.
+
+On the RP2350, `embassy_rp::init` writes the voltage without unlocking the regulator,
+so the register reads back the new value while the chip stays at 1.10 V. The firmware
+unlocks it first. Check the temperature when changing this: it has to go up.
 
 ## Choosing a pool
 
@@ -144,9 +150,10 @@ decides how often you get visible proof that the miner works.
     four SRAM banks, so the cores never wait for each other. The other two banks
     hold everything else.
   - On the RP2350, core 1 drives the SHA-256 accelerator, at about 460 cycles per
-    hash even though it has to hash all three blocks for every nonce: it cannot
-    resume from the midstate. There is only one accelerator, so core 0 runs the
-    Rust loop, for about 8% of the total.
+    hash even though it has to hash all three blocks for every nonce: its state
+    registers cannot be written, so it cannot resume from the midstate. Most of
+    those cycles are the bus, at 4 to 5 per register access. There is only one
+    accelerator, so core 0 runs the Rust loop, for about 8% of the total.
   - A UF2 file names a chip family on every block, and a boot ROM skips the blocks
     of the others. `tools/uf2.py` mixes both images evenly, so that either board
     finishes at the end of the file: a board restarts on its last block, and

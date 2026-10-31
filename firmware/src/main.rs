@@ -122,6 +122,7 @@ struct Board {
     key0: Peri<'static, PIN_15>,
     key1: Peri<'static, PIN_17>,
     settings: &'static Settings,
+    screen: bool,
     /// Runs the setup portal instead of mining.
     portal: bool,
     self_test: bool,
@@ -240,16 +241,17 @@ async fn startup(board: Board) {
     spawner.spawn(watchdog_feeder().unwrap());
     spawner.spawn(usb_logger(usb::Driver::new(board.usb, Irqs)).unwrap());
 
-    let mut config = spi::Config::default();
-    config.frequency = 10_000_000;
-    let bus = Spi::new_blocking_txonly(board.spi1, board.oled_clk, board.oled_mosi, config);
-    let display = Display::new(
-        bus,
-        Output::new(board.oled_dc, Level::Low),
-        Output::new(board.oled_cs, Level::High),
-        Output::new(board.oled_rst, Level::High),
-    )
-    .await;
+    let display = if board.screen {
+        let mut config = spi::Config::default();
+        config.frequency = 10_000_000;
+        let bus = Spi::new_blocking_txonly(board.spi1, board.oled_clk, board.oled_mosi, config);
+        let dc = Output::new(board.oled_dc, Level::Low);
+        let cs = Output::new(board.oled_cs, Level::High);
+        let rst = Output::new(board.oled_rst, Level::High);
+        Some(Display::new(bus, dc, cs, rst).await)
+    } else {
+        None
+    };
     let key0 = Input::new(board.key0, Pull::Up);
     let key1 = Input::new(board.key1, Pull::Up);
     let adc = Adc::new_blocking(board.adc, adc::Config::default());
@@ -268,6 +270,7 @@ async fn startup(board: Board) {
     info!("{} on {} at {} kHz", config::AGENT, config::CHIP, embassy_rp::clocks::clk_sys_freq() / 1000);
     panic::log_previous();
     info!("settings from {}", if settings::stored().is_some() { "flash" } else { ".env" });
+    info!("screen {}", if board.screen { "found" } else { "absent" });
     if !board.self_test {
         error!("hashing self-test failed");
     }
@@ -301,6 +304,48 @@ fn set_flash_divider(divider: u32) {
     }
 }
 
+/// Sets the core voltage. `embassy_rp::init` writes it too, but it never unlocks the
+/// regulator, so on the RP2350 the value reads back fine and changes nothing.
+#[cfg(rp2350)]
+fn set_core_voltage() {
+    use embassy_rp::pac::POWMAN;
+    const PASSWORD: u32 = 0x5afe << 16;
+    /// More than the 2 ms the regulator takes, at the boot clock or below.
+    const SETTLE: u32 = 300_000;
+
+    POWMAN.vreg_ctrl().modify(|w| {
+        w.0 = (w.0 & 0xffff) | PASSWORD;
+        w.set_unlock(true);
+    });
+    while POWMAN.vreg().read().update_in_progress() {}
+    POWMAN.vreg().modify(|w| {
+        w.0 = (w.0 & 0xffff) | PASSWORD;
+        w.set_vsel(config::CORE_VOLTAGE as u8);
+    });
+    while POWMAN.vreg().read().update_in_progress() {}
+    cortex_m::asm::delay(SETTLE);
+}
+
+/// Sets the flash clock divider, scaling the read delay and the deselect time the
+/// boot ROM chose for a divider of 3, as both count system clock cycles. Runs from
+/// RAM because code cannot be fetched while the timing changes.
+#[cfg(rp2350)]
+#[unsafe(link_section = ".data.ram_func")]
+#[inline(never)]
+fn set_flash_divider(divider: u32) {
+    use embassy_rp::pac;
+    const UNCACHED_FLASH: *const u32 = 0x1400_0000 as *const u32;
+    // After the two USB pads, entry 3 is the chip select, which idles high.
+    while !pac::IO_QSPI.gpio(3).status().read().outtopad() {}
+    pac::QMI.mem(0).timing().modify(|w| {
+        w.set_clkdiv(divider as u8);
+        w.set_rxdelay((divider * 2 / 3).min(7) as u8);
+        w.set_min_deselect((divider * 7 / 3).min(31) as u8);
+    });
+    // SAFETY: a plain read of flash. It makes the new timing take effect.
+    unsafe { UNCACHED_FLASH.read_volatile() };
+}
+
 #[entry]
 fn main() -> ! {
     let mode = boot::enter();
@@ -317,8 +362,9 @@ fn main() -> ! {
         }
     }
 
-    #[cfg(not(rp2350))]
-    if config::FLASH_DIVIDER > 2 {
+    #[cfg(rp2350)]
+    set_core_voltage();
+    if config::FLASH_DIVIDER > config::STOCK_FLASH_DIVIDER {
         set_flash_divider(config::FLASH_DIVIDER);
     }
     let mut clocks = ClockConfig::system_freq(config::SYS_HZ).unwrap();
@@ -336,7 +382,11 @@ fn main() -> ! {
         cortex_m::asm::delay(config::SYS_HZ / 10_000);
         key.is_low()
     };
-    let portal = !cfg!(feature = "stress") && (key0_held || !settings.is_complete());
+    let (mut oled_clk, mut oled_mosi) = (p.PIN_10, p.PIN_11);
+    let screen = display::detect(oled_clk.reborrow(), oled_mosi.reborrow());
+    // The portal needs the screen to say how to reach it. Without one the board
+    // is expected to carry its settings from `.env`.
+    let portal = !cfg!(feature = "stress") && screen && (key0_held || !settings.is_complete());
 
     scan::load();
     let self_test = scan::self_test();
@@ -351,14 +401,15 @@ fn main() -> ! {
     let board = Board {
         usb: p.USB,
         spi1: p.SPI1,
-        oled_clk: p.PIN_10,
-        oled_mosi: p.PIN_11,
+        oled_clk,
+        oled_mosi,
         oled_dc: p.PIN_8,
         oled_cs: p.PIN_9,
         oled_rst: p.PIN_12,
         key0,
         key1: p.PIN_17,
         settings,
+        screen,
         portal,
         self_test,
         wifi_pwr: p.PIN_23,
