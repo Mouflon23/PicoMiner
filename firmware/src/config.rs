@@ -1,4 +1,5 @@
-//! Settings baked in at build time from `.env`, plus tuning constants.
+//! Settings baked in at build time from `.env`, plus tuning constants. The setup
+//! portal's settings replace the network and pool ones, see `settings.rs`.
 
 use embassy_rp::clocks::CoreVoltage;
 
@@ -49,7 +50,3 @@ pub const SUGGESTED_DIFFICULTY: f64 = 0.0005;
 /// Hits below this are not worth reporting, whatever the pool asks for. Set well
 /// under any pool difficulty so the best-difficulty counter keeps moving.
 pub const LOCAL_MIN_DIFFICULTY: f64 = 0.0001;
-
-pub const fn network_configured() -> bool {
-    !WIFI_SSID.is_empty() && !BTC_ADDRESS.is_empty()
-}

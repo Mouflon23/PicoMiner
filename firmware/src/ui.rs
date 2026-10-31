@@ -1,5 +1,6 @@
 //! Screen pages and the task that refreshes them. KEY0 cycles the pages and KEY1
-//! turns the panel off, which matters on an OLED left running for days.
+//! turns the panel off, which matters on an OLED left running for days. In the
+//! setup portal a single page says how to reach it.
 
 use core::fmt::Write;
 
@@ -16,10 +17,11 @@ use embedded_graphics::text::{Alignment, Baseline, Text, TextStyleBuilder};
 use heapless::String;
 use log::info;
 use picominer_core::format::{Si, Uptime};
+use picominer_core::settings::Settings;
 
-use crate::config;
 use crate::display::{Display, WIDTH};
 use crate::miner;
+use crate::portal;
 use crate::stats::{self, Stats};
 
 const PAGES: u8 = 3;
@@ -64,10 +66,10 @@ fn miner_page(display: &mut Display, stats: &Stats, hashrate: f32) {
     }
 }
 
-fn pool_page(display: &mut Display, stats: &Stats, uptime: u32) {
+fn pool_page(display: &mut Display, settings: &Settings, stats: &Stats, uptime: u32) {
     title(display, "Pool");
     let mut text: String<24> = String::new();
-    let _ = write!(text, "{}", config::POOL_HOST);
+    let _ = write!(text, "{}", settings.pool_host.get(..21).unwrap_or(&settings.pool_host));
     left(display, 0, 14, &text);
     text.clear();
     let _ = write!(text, "Diff   {}", Si(stats.pool_difficulty));
@@ -80,10 +82,10 @@ fn pool_page(display: &mut Display, stats: &Stats, uptime: u32) {
     left(display, 0, 50, &text);
 }
 
-fn network_page(display: &mut Display, stats: &Stats, total: u64) {
+fn network_page(display: &mut Display, settings: &Settings, stats: &Stats, total: u64) {
     title(display, "Wi-Fi");
     let mut text: String<24> = String::new();
-    let _ = write!(text, "{}", config::WIFI_SSID);
+    let _ = write!(text, "{}", settings.wifi_ssid.get(..21).unwrap_or(&settings.wifi_ssid));
     left(display, 0, 14, &text);
     text.clear();
     let [a, b, c, d] = stats.ip;
@@ -94,6 +96,21 @@ fn network_page(display: &mut Display, stats: &Stats, total: u64) {
     left(display, 0, 38, &text);
     text.clear();
     let _ = write!(text, "Hashes {}", Si(total as f64));
+    left(display, 0, 50, &text);
+}
+
+fn portal_page(display: &mut Display) {
+    title(display, "Setup");
+    let mut text: String<24> = String::new();
+    let _ = write!(text, "Wi-Fi {}", portal::AP_SSID);
+    left(display, 0, 14, &text);
+    text.clear();
+    let _ = write!(text, "Pass  {}", portal::AP_PASSWORD);
+    left(display, 0, 26, &text);
+    left(display, 0, 38, "then open");
+    text.clear();
+    let [a, b, c, d] = portal::ADDRESS;
+    let _ = write!(text, "http://{a}.{b}.{c}.{d}");
     left(display, 0, 50, &text);
 }
 
@@ -110,6 +127,8 @@ pub async fn run(
     key1: Input<'static>,
     mut adc: Adc<'static, Blocking>,
     mut sensor: Channel<'static>,
+    settings: &'static Settings,
+    portal: bool,
 ) -> ! {
     let mut page = 0;
     let mut powered = true;
@@ -178,9 +197,10 @@ pub async fn run(
             let stats = stats::get();
             display.clear();
             match page {
+                _ if portal => portal_page(&mut display),
                 0 => miner_page(&mut display, &stats, hashrate),
-                1 => pool_page(&mut display, &stats, started.elapsed().as_secs() as u32),
-                _ => network_page(&mut display, &stats, total),
+                1 => pool_page(&mut display, settings, &stats, started.elapsed().as_secs() as u32),
+                _ => network_page(&mut display, settings, &stats, total),
             }
             display.flush();
         }

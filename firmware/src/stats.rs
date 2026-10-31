@@ -8,7 +8,9 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Starting,
-    /// No credentials in `.env`: hashing a synthetic job to measure speed.
+    /// Serving the setup portal.
+    Setup,
+    /// No credentials: hashing a synthetic job to measure speed.
     Benchmark,
     Joining,
     Dhcp,
@@ -21,6 +23,7 @@ impl Status {
     pub fn label(self) -> &'static str {
         match self {
             Status::Starting => "Starting",
+            Status::Setup => "Setup",
             Status::Benchmark => "Benchmark",
             Status::Joining => "Wi-Fi...",
             Status::Dhcp => "DHCP...",

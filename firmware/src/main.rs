@@ -10,7 +10,9 @@ mod display;
 mod miner;
 mod panic;
 mod pool;
+mod portal;
 mod scan;
+mod settings;
 mod stats;
 mod ui;
 
@@ -41,6 +43,7 @@ use embassy_time::Timer;
 use embassy_usb_logger::ReceiverHandler;
 use fixed::FixedU32;
 use log::{LevelFilter, error, info, warn};
+use picominer_core::settings::Settings;
 use picominer_core::sha256::Work;
 use static_cell::StaticCell;
 
@@ -117,6 +120,9 @@ struct Board {
     oled_rst: Peri<'static, PIN_12>,
     key0: Peri<'static, PIN_15>,
     key1: Peri<'static, PIN_17>,
+    settings: &'static Settings,
+    /// Runs the setup portal instead of mining.
+    portal: bool,
     wifi_pwr: Peri<'static, PIN_23>,
     wifi_cs: Peri<'static, PIN_25>,
     wifi_dio: Peri<'static, PIN_24>,
@@ -127,7 +133,7 @@ struct Board {
     temperature: Peri<'static, ADC_TEMP_SENSOR>,
 }
 
-async fn start_network(spawner: Spawner, board: Wifi) {
+async fn start_network(spawner: Spawner, board: Wifi, settings: &'static Settings, portal: bool) {
     static WIFI_STATE: StaticCell<cyw43::State> = StaticCell::new();
     static NET_RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
     static FIRMWARE: &cyw43::Aligned<cyw43::A4, [u8]> = &cyw43::Aligned(*cyw43_firmware::CYW43_43439A0);
@@ -157,8 +163,20 @@ async fn start_network(spawner: Spawner, board: Wifi) {
     control.gpio_set(0, false).await;
     info!("CYW43 ready, MAC {:02x?}", control.address().await);
 
-    if !config::network_configured() {
-        warn!("no Wi-Fi credentials or BTC address in .env, staying in benchmark mode");
+    let seed = RoscRng.next_u64();
+    let resources = NET_RESOURCES.init(StackResources::new());
+    if portal {
+        static NETWORKS: StaticCell<portal::Networks> = StaticCell::new();
+        let networks = NETWORKS.init(portal::scan(&mut control).await);
+        info!("{} Wi-Fi networks in range", networks.len());
+        portal::start_access_point(&mut control).await;
+        let (stack, runner) = embassy_net::new(device, portal::net_config(), resources, seed);
+        spawner.spawn(net_runner(runner).unwrap());
+        portal::spawn(spawner, stack, control, settings, networks);
+        return;
+    }
+    if !settings.is_complete() {
+        warn!("no Wi-Fi network or BTC address, staying in benchmark mode");
         return;
     }
 
@@ -167,11 +185,9 @@ async fn start_network(spawner: Spawner, board: Wifi) {
     // A second DHCP server on the network refuses the leases of the first, and
     // honouring that drops the address, and the pool, right after connecting.
     dhcp.ignore_naks = true;
-    let seed = RoscRng.next_u64();
-    let resources = NET_RESOURCES.init(StackResources::new());
     let (stack, runner) = embassy_net::new(device, embassy_net::Config::dhcpv4(dhcp), resources, seed);
     spawner.spawn(net_runner(runner).unwrap());
-    spawner.spawn(pool::run(stack, control).unwrap());
+    spawner.spawn(pool::run(stack, control, settings).unwrap());
 }
 
 struct Wifi {
@@ -236,9 +252,12 @@ async fn startup(board: Board) {
     let key1 = Input::new(board.key1, Pull::Up);
     let adc = Adc::new_blocking(board.adc, adc::Config::default());
     let sensor = adc::Channel::new_temp_sensor(board.temperature);
-    spawner.spawn(ui::run(display, key0, key1, adc, sensor).unwrap());
+    let (settings, portal) = (board.settings, board.portal);
+    spawner.spawn(ui::run(display, key0, key1, adc, sensor, settings, portal).unwrap());
 
-    if !config::network_configured() || cfg!(feature = "stress") {
+    if portal {
+        stats::set_status(Status::Setup);
+    } else if !settings.is_complete() || cfg!(feature = "stress") {
         publish_benchmark();
     }
 
@@ -246,6 +265,7 @@ async fn startup(board: Board) {
     Timer::after_secs(2).await;
     info!("{} on {} kHz", config::AGENT, embassy_rp::clocks::clk_sys_freq() / 1000);
     panic::log_previous();
+    info!("settings from {}", if settings::stored().is_some() { "flash" } else { ".env" });
     if !scan::self_test() {
         error!("assembly self-test failed");
     }
@@ -258,7 +278,7 @@ async fn startup(board: Board) {
         pio0: board.pio0,
         dma: board.dma,
     };
-    start_network(spawner, wifi).await;
+    start_network(spawner, wifi, settings, portal).await;
 }
 
 /// Sets the flash clock divider. Runs from RAM because XIP is off while it does.
@@ -280,7 +300,10 @@ fn set_flash_divider(divider: u32) {
 
 #[entry]
 fn main() -> ! {
-    if boot::enter() == boot::Mode::Safe {
+    let mode = boot::enter();
+    // Before the clocks go up, see the module.
+    settings::commit_staged();
+    if mode == boot::Mode::Safe {
         let p = embassy_rp::init(Config::default());
         interrupt::SWI_IRQ_1.set_priority(Priority::P3);
         let spawner = EXECUTOR.start(interrupt::SWI_IRQ_1);
@@ -300,10 +323,23 @@ fn main() -> ! {
     clocks.peri_clk_src = Some(PeriClkSrc::PllUsb);
     let p = embassy_rp::init(Config::new(clocks));
 
+    static SETTINGS: StaticCell<Settings> = StaticCell::new();
+    let settings = SETTINGS.init(settings::stored().unwrap_or_else(settings::defaults));
+    let mut key0 = p.PIN_15;
+    let key0_held = {
+        let key = Input::new(key0.reborrow(), Pull::Up);
+        // Lets the pull-up charge the line.
+        cortex_m::asm::delay(config::SYS_HZ / 10_000);
+        key.is_low()
+    };
+    let portal = !cfg!(feature = "stress") && (key0_held || !settings.is_complete());
+
     scan::load();
-    // SAFETY: this is the only reference ever made to the stack.
-    let core1_stack = unsafe { &mut *addr_of_mut!(CORE1_STACK) };
-    spawn_core1(p.CORE1, core1_stack, || miner::mine(1));
+    if !portal {
+        // SAFETY: this is the only reference ever made to the stack.
+        let core1_stack = unsafe { &mut *addr_of_mut!(CORE1_STACK) };
+        spawn_core1(p.CORE1, core1_stack, || miner::mine(1));
+    }
 
     interrupt::SWI_IRQ_1.set_priority(Priority::P3);
     let spawner = EXECUTOR.start(interrupt::SWI_IRQ_1);
@@ -315,8 +351,10 @@ fn main() -> ! {
         oled_dc: p.PIN_8,
         oled_cs: p.PIN_9,
         oled_rst: p.PIN_12,
-        key0: p.PIN_15,
+        key0,
         key1: p.PIN_17,
+        settings,
+        portal,
         wifi_pwr: p.PIN_23,
         wifi_cs: p.PIN_25,
         wifi_dio: p.PIN_24,

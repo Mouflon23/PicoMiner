@@ -1,6 +1,7 @@
 MEMORY {
     BOOT2 : ORIGIN = 0x10000000, LENGTH = 0x100
-    FLASH : ORIGIN = 0x10000100, LENGTH = 2048K - 0x100
+    /* The last 4K sector holds the portal's settings, see settings.rs. */
+    FLASH : ORIGIN = 0x10000100, LENGTH = 2048K - 0x100 - 4K
 
     /* The unstriped aliases of the four 64K SRAM banks. Each core hashes with its
        code and stack alone in one bank, so the cores never wait for each other. */
