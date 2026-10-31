@@ -17,7 +17,6 @@ stress = []
 
 [dependencies]
 picominer-core = { path = "../core" }
-embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "boot2-w25q080", "executor-interrupt", "unstable-pac"] }
 embassy-executor = "0.10"
 embassy-net = { version = "0.9", features = ["tcp", "udp", "dns", "dhcpv4", "dhcpv4-hostname", "proto-ipv4", "medium-ethernet"] }
 embassy-time = "0.5"
@@ -35,3 +34,11 @@ heapless = "0.9"
 log = "0.4"
 cortex-m = { version = "0.7", features = ["inline-asm"] }
 cortex-m-rt = "0.7"
+
+# The build target picks the chip: the Pico W by default, the Pico 2 W with
+# --target thumbv8m.main-none-eabihf. scripts/flash.ps1 builds both.
+[target.thumbv6m-none-eabi.dependencies]
+embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "boot2-w25q080", "executor-interrupt", "unstable-pac"] }
+
+[target.'thumbv8m.main-none-eabihf'.dependencies]
+embassy-rp = { version = "0.10", features = ["rp235xa", "time-driver", "critical-section-impl", "executor-interrupt", "unstable-pac"] }

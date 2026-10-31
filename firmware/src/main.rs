@@ -1,5 +1,5 @@
-//! PicoMiner: a solo Bitcoin lottery miner for the Raspberry Pi Pico W with a
-//! Waveshare Pico-OLED-1.3. See the README for the wider picture.
+//! PicoMiner: a solo Bitcoin lottery miner for the Raspberry Pi Pico W and Pico 2 W
+//! with a Waveshare Pico-OLED-1.3. See the README for the wider picture.
 
 #![no_std]
 #![no_main]
@@ -11,6 +11,7 @@ mod miner;
 mod panic;
 mod pool;
 mod portal;
+#[cfg_attr(rp2350, path = "scan_rp2350.rs")]
 mod scan;
 mod settings;
 mod stats;
@@ -58,7 +59,7 @@ bind_interrupts!(struct Irqs {
 
 static EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 
-#[unsafe(link_section = ".miner1.stack")]
+#[cfg_attr(not(rp2350), unsafe(link_section = ".miner1.stack"))]
 static mut CORE1_STACK: Stack<4096> = Stack::new();
 
 #[interrupt]
@@ -123,6 +124,7 @@ struct Board {
     settings: &'static Settings,
     /// Runs the setup portal instead of mining.
     portal: bool,
+    self_test: bool,
     wifi_pwr: Peri<'static, PIN_23>,
     wifi_cs: Peri<'static, PIN_25>,
     wifi_dio: Peri<'static, PIN_24>,
@@ -263,11 +265,11 @@ async fn startup(board: Board) {
 
     // Leaves the host time to open the serial port before the first logs.
     Timer::after_secs(2).await;
-    info!("{} on {} kHz", config::AGENT, embassy_rp::clocks::clk_sys_freq() / 1000);
+    info!("{} on {} at {} kHz", config::AGENT, config::CHIP, embassy_rp::clocks::clk_sys_freq() / 1000);
     panic::log_previous();
     info!("settings from {}", if settings::stored().is_some() { "flash" } else { ".env" });
-    if !scan::self_test() {
-        error!("assembly self-test failed");
+    if !board.self_test {
+        error!("hashing self-test failed");
     }
 
     let wifi = Wifi {
@@ -282,6 +284,7 @@ async fn startup(board: Board) {
 }
 
 /// Sets the flash clock divider. Runs from RAM because XIP is off while it does.
+#[cfg(not(rp2350))]
 #[unsafe(link_section = ".data.ram_func")]
 #[inline(never)]
 fn set_flash_divider(divider: u32) {
@@ -314,6 +317,7 @@ fn main() -> ! {
         }
     }
 
+    #[cfg(not(rp2350))]
     if config::FLASH_DIVIDER > 2 {
         set_flash_divider(config::FLASH_DIVIDER);
     }
@@ -335,6 +339,7 @@ fn main() -> ! {
     let portal = !cfg!(feature = "stress") && (key0_held || !settings.is_complete());
 
     scan::load();
+    let self_test = scan::self_test();
     if !portal {
         // SAFETY: this is the only reference ever made to the stack.
         let core1_stack = unsafe { &mut *addr_of_mut!(CORE1_STACK) };
@@ -355,6 +360,7 @@ fn main() -> ! {
         key1: p.PIN_17,
         settings,
         portal,
+        self_test,
         wifi_pwr: p.PIN_23,
         wifi_cs: p.PIN_25,
         wifi_dio: p.PIN_24,

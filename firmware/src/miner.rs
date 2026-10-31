@@ -8,13 +8,11 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use heapless::Deque;
-#[cfg(feature = "stress")]
-use picominer_core::sha256::CONTEXT_WORDS;
 use picominer_core::sha256::Work;
 use picominer_core::target::{hash_difficulty, share_limit};
 
 use crate::config::LOCAL_MIN_DIFFICULTY;
-use crate::scan::Scanner;
+use crate::scan::{self, Scanner};
 use crate::stats;
 
 /// Nonces between two looks at the job slot: a few milliseconds of work.
@@ -95,7 +93,7 @@ fn report(generation: u32, work: &Work, nonce: u32, limit: u32) {
 
 /// Compares both SHA-256 implementations on a few nonces. Returns the hashes run.
 #[cfg(feature = "stress")]
-fn stress(scanner: Scanner, work: &Work, context: &[u32; CONTEXT_WORDS], nonce: u32) -> u32 {
+fn stress(scanner: Scanner, work: &Work, context: &scan::Context, nonce: u32) -> u32 {
     const NONCES: u32 = 16;
     for n in nonce..nonce.saturating_add(NONCES) {
         if !scanner.agrees(work, context, n) {
@@ -115,7 +113,7 @@ pub fn mine(core: usize) -> ! {
     loop {
         let current = GENERATION.load(Ordering::Acquire);
         if current != generation {
-            job = WORK.lock(Cell::get).map(|work: Work| (work, work.context()));
+            job = WORK.lock(Cell::get).map(|work: Work| (work, scan::context(&work)));
             generation = current;
             nonce = half;
         }

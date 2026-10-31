@@ -11,6 +11,7 @@ pub const POOL_PORT: &str = env!("PICOMINER_POOL_PORT");
 pub const WORKER: &str = env!("PICOMINER_WORKER");
 
 pub const AGENT: &str = concat!("PicoMiner/", env!("CARGO_PKG_VERSION"));
+pub const CHIP: &str = if cfg!(rp2350) { "RP2350" } else { "RP2040" };
 
 const fn parse(text: &str) -> u32 {
     let bytes = text.as_bytes();
@@ -42,6 +43,7 @@ pub const WIFI_DIVIDER: u32 = SYS_MHZ.div_ceil(67);
 /// Boot2 leaves the flash at clk_sys / 2, and it is rated for 133 MHz. Past 200
 /// MHz this keeps it at or under 100 MHz: only cold code runs from it. The SSI
 /// only takes even dividers.
+#[cfg(not(rp2350))]
 pub const FLASH_DIVIDER: u32 = SYS_MHZ.div_ceil(100).next_multiple_of(2);
 
 /// Roughly one share every 20 s when overclocked, and every 40 s at stock.
