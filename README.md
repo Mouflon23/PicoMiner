@@ -13,8 +13,8 @@ Measured on real hardware, across both cores:
 | --- | --- | --- | --- |
 | Pico W | 200 MHz, the highest the datasheet covers | 1.15 V | 59 kH/s |
 | Pico W | 432 MHz, overclocked, on one tested board | 1.30 V | 128 kH/s |
-| Pico 2 W | 150 MHz, stock | 1.10 V | 356 kH/s |
-| Pico 2 W | 412 MHz, overclocked, on one tested board | 1.30 V | **976 kH/s** |
+| Pico 2 W | 150 MHz, stock | 1.10 V | 382 kH/s |
+| Pico 2 W | 412 MHz, overclocked, on one tested board | 1.30 V | **1.05 MH/s** |
 
 ## The odds
 
@@ -105,7 +105,7 @@ cycle forgets everything.
 
 The tested Pico W ran 18 million checked hashes at 432 MHz and 1.30 V without an
 error, at 41 °C with no heatsink, and crashes from 440 MHz. The tested Pico 2 W held
-412 MHz at 1.30 V, at 42 °C with no heatsink, and crashes from 416 MHz. The clock
+412 MHz at 1.30 V, at 39 °C with no heatsink, and crashes from 416 MHz. The clock
 moves in steps of a few MHz up there. 1.30 V is the regulator's ceiling before its
 limit has to be disabled, and PicoMiner does not go past it.
 
@@ -149,11 +149,13 @@ decides how often you get visible proof that the miner works.
   - Each core runs its own copy of that loop, with its stack, alone in one of the
     four SRAM banks, so the cores never wait for each other. The other two banks
     hold everything else.
-  - On the RP2350, core 1 drives the SHA-256 accelerator, at about 460 cycles per
-    hash even though it has to hash all three blocks for every nonce: its state
+  - On the RP2350, core 1 drives the SHA-256 accelerator, at 429 cycles per hash
+    even though it has to hash all three blocks for every nonce: its state
     registers cannot be written, so it cannot resume from the midstate. Most of
-    those cycles are the bus, at 4 to 5 per register access. There is only one
-    accelerator, so core 0 runs the Rust loop, for about 8% of the total.
+    those cycles are the bus, at 4 to 5 per register access, so
+    `firmware/src/scan_rp2350.s` reads RAM while the accelerator computes and reads
+    its status at the moment it finishes. There is only one accelerator, so core 0
+    runs the Rust loop, for about 8% of the total.
   - A UF2 file names a chip family on every block, and a boot ROM skips the blocks
     of the others. `tools/uf2.py` mixes both images evenly, so that either board
     finishes at the end of the file: a board restarts on its last block, and
